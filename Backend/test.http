@@ -1,0 +1,8 @@
+### Login
+POST http://localhost:3000/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "admin@agriguard.com",
+  "password": "Admin@123!"
+}
