@@ -127,8 +127,8 @@ agriguard/
 ├── local-ai-service/
 │   ├── app.py
 │   ├── requirements.txt
-│   ├── models/              # local model files, not committed to GitHub
-│   └── .venv/               # local virtual environment, not committed to GitHub
+│   ├── models/             
+│   └── .venv/               
 │
 └── README.md
 ```
@@ -164,7 +164,7 @@ FRONTEND_BASE_URL=http://localhost:5173
 SHOW_INVITE_PREVIEW_LINK=true
 SHOW_PASSWORD_RESET_PREVIEW_LINK=false
 
-EMAIL_ENABLED=false
+EMAIL_ENABLED=true
 EMAIL_PROVIDER=smtp
 SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
@@ -192,13 +192,13 @@ SENTINEL_STATS_URL=https://sh.dataspace.copernicus.eu/statistics/v1
 NASA_POWER_ENABLED=true
 ```
 
-Create a `.env` file inside the `Frontend/` folder if needed:
+Create a `.env` file inside the `Frontend/` folder:
 
 ```env
 VITE_API_BASE_URL=http://localhost:4000/api
+VITE_PUSHER_KEY=your_pusher_key
+VITE_PUSHER_CLUSTER=your_pusher_cluster
 ```
-
-Never commit `.env` files to GitHub.
 
 ## Installation
 
@@ -244,43 +244,12 @@ Then install dependencies:
 pip install -r requirements.txt
 ```
 
-If `requirements.txt` is not available, install the core packages manually:
-
-```bash
-pip install fastapi uvicorn pillow torch transformers qwen-vl-utils accelerate
-```
-
 ## Local Qwen Model Setup
 
-The model files should stay local and should not be uploaded to GitHub.
-
-Expected local path:
+Local path:
 
 ```text
 local-ai-service/models/Qwen2.5-VL-3B-Instruct
-```
-
-Recommended `.gitignore` entries:
-
-```gitignore
-**/node_modules/
-**/.env
-**/.env.local
-**/.env.development.local
-**/.env.test.local
-**/.env.production.local
-**/dist/
-**/coverage/
-**/build/
-**/.venv/
-**/venv/
-**/__pycache__/
-**/*.pyc
-local-ai-service/models/
-*.log
-.DS_Store
-Thumbs.db
-.idea/
 ```
 
 ## Running the Project
@@ -305,8 +274,6 @@ Health check:
 ```bash
 http://127.0.0.1:8105/health
 ```
-
-The model may load lazily on the first image request, so the first AI request can be slower.
 
 ### Terminal 2: Backend
 
@@ -336,66 +303,8 @@ http://localhost:5173
 
 ## AI Crop Doctor Notes
 
-The local Qwen model can be slow on laptops without a dedicated GPU. For better demo performance:
-
-- use a small cropped crop/leaf image,
-- avoid full-resolution phone photos,
-- click the AI button once and wait,
-- keep the local AI service terminal open,
-- make sure the backend `.env` has `LOCAL_AI_SERVICE_URL=http://127.0.0.1:8105`.
-
-If the AI service port is already in use on Windows:
-
-```powershell
-netstat -ano | findstr :8105
-```
-
-Then kill the process by PID:
-
-```powershell
-taskkill /PID <PID> /F
-```
-
-## Demo Scenario
-
-A recommended demo flow:
-
-1. Login as admin.
-2. Show dashboard overview.
-3. Create or review a field, such as `Janoub Green Farm`.
-4. Assign a farmer to the field.
-5. Show that agronomists can support multiple fields.
-6. Login as farmer.
-7. Open AI Crop Doctor.
-8. Upload a crop/leaf image and ask what to do.
-9. Submit an agronomist visit request.
-10. Login as admin.
-11. Review the request and assign an agronomist.
-12. Login as agronomist.
-13. Accept or reject the request.
-14. Show role-based calendar visibility.
-15. Use chat to follow up with the farmer.
-16. Show announcements created by admin and viewed by farmer/agronomist.
-
-## Important Security Notes
-
-Do not commit the following to GitHub:
-
-- `.env` files,
-- SMTP passwords,
-- JWT secrets,
-- Pusher secrets,
-- Sentinel client secrets,
-- local AI model weights,
-- `node_modules`,
-- Python virtual environments.
-
-If any secrets were accidentally pushed to a public repository, rotate them immediately.
-
-## Repository Description
-
-AgriGuard is an AI-enabled farm monitoring platform that helps farmers detect crop-health issues, request agronomist support, and coordinate field visits through satellite insights, local AI image analysis, role-based calendars, notifications, and chat.
+The local Qwen model can be slow on laptops without a dedicated GPU. 
 
 ## License
 
-This project is intended for academic and demonstration purposes. Add a license file if you plan to publish or reuse it publicly.
+This project is was done by the author of the repository. Please reference the author if you plan to reuse any part of my project.
