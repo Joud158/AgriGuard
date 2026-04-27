@@ -1,8 +1,10 @@
 import React from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useSearchParams } from 'react-router-dom';
+
 import DashboardLayout from '../layouts/DashboardLayout';
 import Toast from '../components/Toast';
+
 import { useAuth } from '../context/AuthContext';
 import { getAnnouncements, getNotifications, markNotificationRead } from '../services/authApi';
 
@@ -20,7 +22,9 @@ function formatDateTime(value) {
 
 function buildSnippet(message) {
   const text = String(message || '').trim();
+
   if (text.length <= 140) return text;
+
   return `${text.slice(0, 140).trimEnd()}...`;
 }
 
@@ -30,13 +34,21 @@ function resolveTeamLabel(announcement) {
   if (announcement.team_name) return announcement.team_name;
   if (announcement.teamName) return announcement.teamName;
   if (announcement.team_id) return 'Field update';
+
   return 'Announcement';
 }
 
 function formatSenderLabel(announcement) {
-  const senderName = announcement.sender?.full_name || announcement.sender?.fullName || 'Unknown sender';
+  const senderName =
+    announcement.sender?.full_name ||
+    announcement.sender?.fullName ||
+    'Unknown sender';
+
   const senderRole = announcement.sender?.role || '';
-  const normalizedRole = senderRole ? `${senderRole.charAt(0).toUpperCase()}${senderRole.slice(1)}` : '';
+
+  const normalizedRole = senderRole
+    ? `${senderRole.charAt(0).toUpperCase()}${senderRole.slice(1)}`
+    : '';
 
   return normalizedRole ? `${senderName} (${normalizedRole})` : senderName;
 }
@@ -54,6 +66,7 @@ function renderAnnouncementList(items, expandedIds, targetAnnouncementId, itemRe
     return (
       <div className="teams-note-card compact">
         <strong>No announcements yet</strong>
+        <p>Farm announcements posted by the administrator will appear here.</p>
       </div>
     );
   }
@@ -89,17 +102,31 @@ function renderAnnouncementList(items, expandedIds, targetAnnouncementId, itemRe
               onClick={() => toggleExpanded(announcement.id)}
               aria-expanded={isExpanded}
             >
-                <div className="announcement-archive-main">
-                  <div className="announcement-archive-meta">
-                    <span className="announcement-archive-date">{announcement.createdLabel}</span>
-                  </div>
-                  <h2>{announcement.title}</h2>
-                  <p><strong>Sent by:</strong> {announcement.senderLabel}</p>
-                  <p><strong>Sent to:</strong> {announcement.teamLabel}</p>
-                  <p>{isExpanded ? announcement.message : announcement.snippet || 'No message provided.'}</p>
+              <div className="announcement-archive-main">
+                <div className="announcement-archive-meta">
+                  <span className="announcement-archive-date">
+                    {announcement.createdLabel}
+                  </span>
                 </div>
-              </button>
-            </article>
+
+                <h2>{announcement.title}</h2>
+
+                <p>
+                  <strong>Sent by:</strong> {announcement.senderLabel}
+                </p>
+
+                <p>
+                  <strong>Sent to:</strong> {announcement.teamLabel}
+                </p>
+
+                <p>
+                  {isExpanded
+                    ? announcement.message
+                    : announcement.snippet || 'No message provided.'}
+                </p>
+              </div>
+            </button>
+          </article>
         );
       })}
     </div>
@@ -110,23 +137,27 @@ export default function AnnouncementsPage() {
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const { user } = useAuth();
+
   const [announcements, setAnnouncements] = useState([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
   const [expandedIds, setExpandedIds] = useState([]);
+
   const itemRefs = useRef(new Map());
   const handledTargetRef = useRef('');
 
   const role = user?.role || 'player';
+  const isAdmin = role === 'admin';
+
   const targetAnnouncementId =
     location.state?.targetAnnouncementId || searchParams.get('announcementId') || '';
-  const canCreateAnnouncement = role === 'admin';
 
   useEffect(() => {
     let active = true;
 
     async function loadAnnouncements() {
       const response = await getAnnouncements();
+
       if (!active) return;
 
       if (!response.success) {
@@ -137,12 +168,14 @@ export default function AnnouncementsPage() {
       }
 
       const items = Array.isArray(response.data) ? response.data : [];
+
       setAnnouncements(items);
       setLoading(false);
     }
 
     loadAnnouncements().catch(() => {
       if (!active) return;
+
       setMessage('Unable to load announcements right now.');
       setAnnouncements([]);
       setLoading(false);
@@ -158,6 +191,7 @@ export default function AnnouncementsPage() {
 
     async function markAnnouncementNotificationsRead() {
       const response = await getNotifications();
+
       if (!active || !response.success || !Array.isArray(response.data)) {
         return;
       }
@@ -171,11 +205,11 @@ export default function AnnouncementsPage() {
         return;
       }
 
-      await Promise.all(unreadAnnouncementIds.map((notificationId) => markNotificationRead(notificationId)));
+      await Promise.all(
+        unreadAnnouncementIds.map((notificationId) => markNotificationRead(notificationId))
+      );
 
-      if (!active) {
-        return;
-      }
+      if (!active) return;
 
       window.dispatchEvent(new Event('notifications:refresh'));
     }
@@ -201,37 +235,46 @@ export default function AnnouncementsPage() {
     [announcements]
   );
 
-  const coachAnnouncementSections = useMemo(() => {
-    if (role !== 'coach') {
-      return null;
+  const visibleAnnouncements = useMemo(() => {
+    if (isAdmin) {
+      return normalizedAnnouncements;
     }
 
-    return {
-      adminAnnouncements: normalizedAnnouncements.filter((announcement) => announcement.sender?.role === 'admin'),
-      ownAnnouncements: normalizedAnnouncements.filter((announcement) => announcement.sender?.id === user?.id),
-    };
-  }, [normalizedAnnouncements, role, user?.id]);
+    return normalizedAnnouncements.filter((announcement) => {
+      const senderRole = announcement.sender?.role || '';
+      return senderRole === 'admin' || !senderRole;
+    });
+  }, [isAdmin, normalizedAnnouncements]);
 
   useEffect(() => {
-    if (!normalizedAnnouncements.length) return;
+    if (!visibleAnnouncements.length) return;
 
     if (targetAnnouncementId && handledTargetRef.current !== targetAnnouncementId) {
-      const match = normalizedAnnouncements.find((announcement) => announcement.id === targetAnnouncementId);
+      const match = visibleAnnouncements.find(
+        (announcement) => announcement.id === targetAnnouncementId
+      );
+
       if (match) {
         handledTargetRef.current = targetAnnouncementId;
-        setExpandedIds((current) => (current.includes(match.id) ? current : [...current, match.id]));
+
+        setExpandedIds((current) =>
+          current.includes(match.id) ? current : [...current, match.id]
+        );
 
         const element = itemRefs.current.get(match.id);
+
         if (element) {
           element.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
       }
     }
-  }, [normalizedAnnouncements, targetAnnouncementId]);
+  }, [visibleAnnouncements, targetAnnouncementId]);
 
   function toggleExpanded(id) {
     setExpandedIds((current) =>
-      current.includes(id) ? current.filter((entry) => entry !== id) : [...current, id]
+      current.includes(id)
+        ? current.filter((entry) => entry !== id)
+        : [...current, id]
     );
   }
 
@@ -240,8 +283,14 @@ export default function AnnouncementsPage() {
       <div className="page-head">
         <div>
           <h1>Announcements</h1>
+          <p>
+            {isAdmin
+              ? 'Create and review announcements shared with farmers and agronomists.'
+              : 'View announcements shared by the administrator.'}
+          </p>
         </div>
-        {canCreateAnnouncement ? (
+
+        {isAdmin ? (
           <Link to="/announcements/create" className="primary-button">
             Create Announcement
           </Link>
@@ -251,48 +300,9 @@ export default function AnnouncementsPage() {
       <section className="dashboard-card announcement-archive-card">
         {loading ? (
           <p className="loading-text">Loading...</p>
-        ) : normalizedAnnouncements.length === 0 ? (
-          <div className="teams-note-card compact">
-            <strong>No announcements yet</strong>
-            <p>Farm announcements posted by the administrator will appear here.</p>
-          </div>
-        ) : role === 'coach' ? (
-          <div className="announcement-archive-sections">
-            <div className="announcement-archive-section">
-              <div className="page-head" style={{ marginBottom: 16 }}>
-                <div>
-                  <h2>From Admin</h2>
-                  <p>Announcements posted by the farm network administrator.</p>
-                </div>
-              </div>
-              {renderAnnouncementList(
-                coachAnnouncementSections?.adminAnnouncements || [],
-                expandedIds,
-                targetAnnouncementId,
-                itemRefs,
-                toggleExpanded
-              )}
-            </div>
-
-            <div className="announcement-archive-section">
-              <div className="page-head" style={{ marginBottom: 16 }}>
-                <div>
-                  <h2>Sent By You</h2>
-                  <p>Announcements you posted to your team.</p>
-                </div>
-              </div>
-              {renderAnnouncementList(
-                coachAnnouncementSections?.ownAnnouncements || [],
-                expandedIds,
-                targetAnnouncementId,
-                itemRefs,
-                toggleExpanded
-              )}
-            </div>
-          </div>
         ) : (
           renderAnnouncementList(
-            normalizedAnnouncements,
+            visibleAnnouncements,
             expandedIds,
             targetAnnouncementId,
             itemRefs,
@@ -305,4 +315,3 @@ export default function AnnouncementsPage() {
     </DashboardLayout>
   );
 }
-

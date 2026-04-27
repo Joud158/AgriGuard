@@ -13,7 +13,7 @@ from qwen_vl_utils import process_vision_info
 QWEN_MODEL_ID = (
     os.getenv("LOCAL_QWEN_MODEL_PATH")
     or os.getenv("LOCAL_QWEN_MODEL")
-    or "Qwen/Qwen2.5-VL-3B-Instruct"
+    or "./models/Qwen2.5-VL-3B-Instruct"
 )
 
 app = FastAPI(title="AgriGuard Local Qwen Crop Vision Service")
@@ -33,22 +33,28 @@ def normalize(value) -> str:
     return str(value or "").strip()
 
 
-def to_data_url(image_base64: str, mime_type: str = "image/jpeg") -> str:
-    raw = normalize(image_base64)
-
-    if raw.startswith("data:"):
-        return raw
-
-    return f"data:{mime_type or 'image/jpeg'};base64,{raw}"
-
-
-def validate_image(image_base64: str) -> None:
+def decode_image(image_base64: str) -> Image.Image:
     try:
-        raw = normalize(image_base64).split(",", 1)[-1]
+        raw = normalize(image_base64)
+
+        if raw.startswith("data:"):
+            raw = raw.split(",", 1)[-1]
+
         image_bytes = base64.b64decode(raw)
-        Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        return Image.open(io.BytesIO(image_bytes)).convert("RGB")
     except Exception as exc:
         raise HTTPException(status_code=400, detail="Invalid image data") from exc
+
+
+def image_to_small_data_url(image: Image.Image, max_size: int = 224) -> str:
+    image = image.copy()
+    image.thumbnail((max_size, max_size))
+
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG", quality=75, optimize=True)
+
+    encoded = base64.b64encode(buffer.getvalue()).decode("utf-8")
+    return f"data:image/jpeg;base64,{encoded}"
 
 
 def guess_severity(answer: str) -> str:
@@ -99,9 +105,12 @@ def load_model():
     global _processor, _model
 
     if _processor is None or _model is None:
+        print(f"[AI] Loading Qwen model from: {QWEN_MODEL_ID}")
+
         _processor = AutoProcessor.from_pretrained(
             QWEN_MODEL_ID,
             trust_remote_code=True,
+            local_files_only=True,
         )
 
         if torch.cuda.is_available():
@@ -110,16 +119,19 @@ def load_model():
                 torch_dtype=torch.float16,
                 device_map="auto",
                 trust_remote_code=True,
+                local_files_only=True,
             )
         else:
             _model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
                 QWEN_MODEL_ID,
                 torch_dtype=torch.float32,
                 trust_remote_code=True,
+                local_files_only=True,
             )
             _model.to("cpu")
 
         _model.eval()
+        print("[AI] Qwen model loaded successfully.")
 
     return _processor, _model
 
@@ -134,21 +146,16 @@ def build_prompt(question: str, crop: str) -> str:
     farmer_question = question or "What is wrong and what should I do?"
 
     return (
-        "You are AgriGuard AI Crop Doctor. Analyze the uploaded crop or leaf image and answer the farmer.\n"
+        "You are AgriGuard AI Crop Doctor. Look at the crop/leaf image and answer briefly.\n"
         f"{crop_context}\n"
         f"Farmer question: {farmer_question}\n\n"
-        "Rules:\n"
-        "- Do not claim a final diagnosis from one photo.\n"
-        "- Do not invent the crop type if it is unclear.\n"
-        "- Do not recommend pesticide, herbicide, chemical, dosage, or treatment.\n"
-        "- Do not tell the farmer to remove leaves or destroy plants unless an agronomist confirms.\n"
-        "- Give practical inspection and documentation steps.\n"
-        "- Keep the answer short, complete, and useful.\n\n"
-        "Use exactly this format:\n"
-        "Likely issue: one short sentence.\n"
-        "What I can see: one short sentence.\n"
-        "What to do now: 3 numbered inspection/documentation steps.\n"
-        "When to request an agronomist: one short sentence.\n"
+        "Do not give a final diagnosis from one photo. "
+        "Do not recommend chemicals, dosages, or removing/destroying plants.\n\n"
+        "Answer exactly:\n"
+        "Likely issue: short phrase.\n"
+        "What I can see: short sentence.\n"
+        "What to do now: inspect nearby leaves, take close and wide photos, and monitor spreading.\n"
+        "When to request an agronomist: short sentence.\n"
     )
 
 
@@ -164,11 +171,13 @@ def health():
 
 @app.post("/analyze-image")
 def analyze_image(payload: ImagePayload):
-    validate_image(payload.imageBase64)
+    image = decode_image(payload.imageBase64)
+
+    # Physically compress the uploaded image before Qwen sees it.
+    # This is important for CPU/integrated-GPU laptops.
+    data_url = image_to_small_data_url(image, max_size=224)
 
     processor, model = load_model()
-
-    data_url = to_data_url(payload.imageBase64, payload.mimeType or "image/jpeg")
     prompt = build_prompt(normalize(payload.symptoms), normalize(payload.crop))
 
     messages = [
@@ -178,8 +187,6 @@ def analyze_image(payload: ImagePayload):
                 {
                     "type": "image",
                     "image": data_url,
-                    "resized_height": 448,
-                    "resized_width": 448,
                 },
                 {
                     "type": "text",
@@ -190,6 +197,8 @@ def analyze_image(payload: ImagePayload):
     ]
 
     try:
+        print("[AI] Starting Qwen inference...")
+
         text = processor.apply_chat_template(
             messages,
             tokenize=False,
@@ -212,7 +221,7 @@ def analyze_image(payload: ImagePayload):
         with torch.no_grad():
             generated_ids = model.generate(
                 **inputs,
-                max_new_tokens=150,
+                max_new_tokens=70,
                 do_sample=False,
             )
 
@@ -227,13 +236,13 @@ def analyze_image(payload: ImagePayload):
             clean_up_tokenization_spaces=False,
         )[0].strip()
 
-        severity = guess_severity(answer)
+        print("[AI] Qwen inference completed.")
 
         return {
             "success": True,
             "model": str(QWEN_MODEL_ID),
             "label": "Qwen visual crop-health advisory",
-            "severity": severity,
+            "severity": guess_severity(answer),
             "confidence": 0,
             "answer": answer,
             "nextSteps": [],
@@ -244,4 +253,5 @@ def analyze_image(payload: ImagePayload):
         }
 
     except Exception as exc:
+        print(f"[AI] Qwen inference failed: {exc}")
         raise HTTPException(status_code=500, detail=f"Qwen inference failed: {exc}") from exc

@@ -1,7 +1,11 @@
+const http = require('http');
+const https = require('https');
+
 const env = require('../config/env');
 const httpError = require('../utils/httpError');
 
 const LOCAL_MODEL_PREFIX = 'Local Hugging Face Vision Model';
+const AI_TIMEOUT_MS = 20 * 60 * 1000;
 
 function normalize(value) {
   return String(value || '').trim();
@@ -24,7 +28,7 @@ function severityFromText(value) {
   }
 
   if (
-    /high|urgent|severe|spreading|blight|rust|rot|mildew|bacterial|virus|leaf spot|spot|disease|lesion|yellowing|wilting/.test(
+    /high|urgent|severe|spreading|blight|rust|rot|mildew|bacterial|virus|leaf spot|spot|disease|lesion|yellowing|wilting|fungal|infection/.test(
       text
     )
   ) {
@@ -32,6 +36,78 @@ function severityFromText(value) {
   }
 
   return 'Medium';
+}
+
+function postJson(urlString, payload) {
+  return new Promise((resolve, reject) => {
+    const url = new URL(urlString);
+    const body = JSON.stringify(payload);
+    const client = url.protocol === 'https:' ? https : http;
+
+    const startedAt = Date.now();
+
+    const request = client.request(
+      {
+        protocol: url.protocol,
+        hostname: url.hostname,
+        port: url.port,
+        path: `${url.pathname}${url.search}`,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(body),
+        },
+        timeout: AI_TIMEOUT_MS,
+      },
+      (response) => {
+        let responseBody = '';
+
+        response.setEncoding('utf8');
+
+        response.on('data', (chunk) => {
+          responseBody += chunk;
+        });
+
+        response.on('end', () => {
+          const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
+
+          console.log('[AI] Local AI service responded in seconds:', elapsedSeconds);
+          console.log('[AI] Local AI status:', response.statusCode);
+
+          resolve({
+            ok: response.statusCode >= 200 && response.statusCode < 300,
+            status: response.statusCode,
+            body: responseBody,
+            elapsedSeconds,
+          });
+        });
+      }
+    );
+
+    request.on('timeout', () => {
+      const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
+      request.destroy(
+        new Error(`Local AI request timed out after ${elapsedSeconds} seconds.`)
+      );
+    });
+
+    request.on('error', (error) => {
+      const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
+
+      console.error('[AI] Local AI HTTP request failed after seconds:', elapsedSeconds);
+      console.error('[AI] Local AI HTTP request failed details:', {
+        url: urlString,
+        name: error.name,
+        message: error.message,
+        code: error.code,
+      });
+
+      reject(error);
+    });
+
+    request.write(body);
+    request.end();
+  });
 }
 
 async function localVisionDiagnosis(payload) {
@@ -50,55 +126,56 @@ async function localVisionDiagnosis(payload) {
 
   const localAiUrl = `${env.localAiServiceUrl.replace(/\/$/, '')}/analyze-image`;
 
-  let response;
+  console.log('[AI] Calling local AI service:', localAiUrl);
+  console.log('[AI] Image base64 length:', image.length);
+
+  let result;
 
   try {
-    console.log('[AI] Calling local AI service:', localAiUrl);
-
-    response = await fetch(localAiUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        imageBase64: image,
-        mimeType: payload.mimeType || 'image/jpeg',
-        symptoms: payload.question || '',
-        crop: payload.crop || '',
-      }),
+    result = await postJson(localAiUrl, {
+      imageBase64: image,
+      mimeType: payload.mimeType || 'image/jpeg',
+      symptoms: payload.question || '',
+      crop: payload.crop || '',
     });
   } catch (error) {
-    console.error('[AI] Local AI fetch failed:', {
-      url: localAiUrl,
-      name: error.name,
-      message: error.message,
-      cause: error.cause,
-    });
-
     throw httpError(
       502,
-      `Could not reach local AI service at ${env.localAiServiceUrl}. Make sure Qwen is running on port 8105.`
-    );
-  }
-
-  if (!response.ok) {
-    const details = await response.text().catch(() => '');
-
-    throw httpError(
-      502,
-      'Local Hugging Face crop-image service returned an error.',
+      `Local Qwen request failed before a response was returned: ${error.message}`,
       {
-        providerStatus: response.status,
-        providerDetails: details.slice(0, 500),
+        providerUrl: localAiUrl,
+        providerError: error.message,
+        providerCode: error.code || '',
       }
     );
   }
 
-  const data = await response.json();
+  if (!result.ok) {
+    throw httpError(
+      502,
+      'Local Hugging Face crop-image service returned an error.',
+      {
+        providerStatus: result.status,
+        providerDetails: result.body.slice(0, 1000),
+      }
+    );
+  }
+
+  let data;
+
+  try {
+    data = JSON.parse(result.body);
+  } catch {
+    throw httpError(502, 'Local AI service returned invalid JSON.', {
+      providerDetails: result.body.slice(0, 1000),
+    });
+  }
 
   const answer =
     normalize(data.answer) ||
     'The model could not generate a useful crop advisory for this image.';
 
-  const label = normalize(data.label) || 'Visual crop-health advisory';
+  const label = normalize(data.label) || 'Qwen visual crop-health advisory';
   const severity = normalize(data.severity) || severityFromText(answer);
 
   return {
